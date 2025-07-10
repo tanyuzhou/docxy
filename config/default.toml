@@ -7,14 +7,39 @@ behind_proxy = false
 
 [registry]
 upstream_registry = "https://registry-1.docker.io"
-# Registry mapping configuration allows for redirecting requests to different registries
-# Format: source_registry = "target_registry"
-# Example: when you run `docker pull docxy.example.com/ghcr.io/binarization/something:latest`
-# it will pull from `ghcr.io/binarization/something:latest`
-[registry.registry_mapping]
-"ghcr.io" = "https://ghcr.io"
-"docker.io" = "https://registry-1.docker.io"
+
+# Registry configurations with API versions and auth URLs
+[registry.registries.ghcr.io]
+url = "https://ghcr.io"
+api_version = "v2"
+auth_url = "https://ghcr.io/token"
+
+[registry.registries.docker.io]
+url = "https://registry-1.docker.io"
+api_version = "v2"
+auth_url = "https://auth.docker.io/token"
 
 [tls]
 cert_path = "/root/.acme.sh/example.com_ecc/fullchain.cer"
 key_path = "/root/.acme.sh/example.com_ecc/example.com.key"
+
+# Custom authentication configuration
+[auth]
+enabled = true
+
+# User accounts
+[auth.users.admin]
+password = "admin_password"
+
+[auth.users.user1]
+password = "user1_password"
+
+# Registry credentials for users
+# Each user can have credentials for different registries
+[auth.users.admin.registry_credentials]
+"ghcr.io" = { username = "admin_github", password = "github_token" }
+"docker.io" = { username = "admin_dockerhub", password = "dockerhub_password" }
+
+[auth.users.user1.registry_credentials]
+"ghcr.io" = { username = "user1_github", password = "github_token" }
+"docker.io" = { username = "user1_dockerhub", password = "dockerhub_password" }

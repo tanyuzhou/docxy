@@ -10,7 +10,7 @@ use log::{info, error};
 mod config;
 mod error;
 mod handlers;
-
+mod auth_utils;
 
 
 lazy_static! {
@@ -76,19 +76,44 @@ async fn main() -> Result<(), AppError> {
     
     info!("上游注册表: {}", settings.registry.upstream_registry);
     
-    // 输出注册表映射配置
-    if let Some(mapping) = &settings.registry.registry_mapping {
-        info!("注册表映射配置:");
-        for (source, target) in mapping {
-            info!("  {} -> {}", source, target);
+    // 输出注册表配置
+    let registries = &settings.registry.registries;
+    if !registries.is_empty() {
+        info!("注册表配置:");
+        for (registry_key, registry_config) in registries {
+            info!("  {} -> {} (API: {:?})", registry_key, registry_config.url, registry_config.api_version);
+            if let Some(auth_url) = &registry_config.auth_url {
+                info!("    认证服务: {}", auth_url);
+            }
         }
     } else {
-        info!("注册表映射: 未配置");
+        info!("注册表配置: 未配置");
     }
     
+    // 输出认证配置
+    if settings.auth.enabled {
+        info!("认证系统: 已启用");
+        let users = &settings.auth.users;
+        if !users.is_empty() {
+            info!("已配置 {} 个用户", users.len());
+            for username in users.keys() {
+                info!("  用户: {}", username);
+                let creds = &users.get(username).unwrap().registry_credentials;
+                if !creds.is_empty() {
+                    for registry in creds.keys() {
+                        info!("    - {} 注册表凭据已配置", registry);
+                    }
+                }
+            }
+        } else {
+            info!("未配置用户");
+        }
+    } else {
+        info!("认证系统: 已禁用");
+    }
 
     // 创建应用配置
-    let http_app_data = web::Data::new(settings.registry.clone());
+    let http_app_data = web::Data::new(settings.clone());
     
 
     let http_app = move || {
@@ -142,9 +167,11 @@ async fn main() -> Result<(), AppError> {
         // 加载TLS配置
         match load_rustls_config(&settings) {
             Ok(rustls_config) => {
+                let https_port = settings.server.https_port;
+                let settings_clone = settings.clone();
                 let https_server = HttpServer::new(move || {
                     App::new()
-                        .app_data(web::Data::new(settings.registry.clone()))
+                        .app_data(web::Data::new(settings_clone.clone()))
                         .route("/v2/", web::get().to(handlers::proxy_challenge))
                         .route("/auth/token", web::get().to(handlers::get_token))
                         .route("/health", web::get().to(handlers::health_check))
@@ -154,7 +181,7 @@ async fn main() -> Result<(), AppError> {
                                .to(handlers::handle_request))
                         .default_service(web::route().to(handlers::handle_invalid_request))  // 添加默认服务处理非法请求
                 })
-                    .bind_rustls(("0.0.0.0", settings.server.https_port), rustls_config)?
+                    .bind_rustls(("0.0.0.0", https_port), rustls_config)?
                     .run();
                 
                 servers.push(https_server);

@@ -13,6 +13,42 @@ DOCXY_KEY_PATH=""
 HTTP_PORT=80
 HTTPS_PORT=443
 DEPLOYMENT_MODE=""
+IS_UPDATE=false
+
+# 显示帮助信息
+show_help() {
+  echo "Docxy 安装和更新脚本"
+  echo
+  echo "用法: $0 [选项]"
+  echo
+  echo "选项:"
+  echo "  -h, --help      显示此帮助信息"
+  echo "  -u, --update    仅更新 Docxy 二进制文件"
+  echo
+  echo "如果不指定任何选项，脚本将执行完整安装流程。"
+  echo
+}
+
+# 解析命令行参数
+parse_args() {
+  while [[ "$#" -gt 0 ]]; do
+    case $1 in
+      -h|--help)
+        show_help
+        exit 0
+        ;;
+      -u|--update)
+        IS_UPDATE=true
+        ;;
+      *)
+        echo -e "${RED}未知选项: $1${NC}"
+        show_help
+        exit 1
+        ;;
+    esac
+    shift
+  done
+}
 
 # 检查是否以 root 权限运行
 if [ "$EUID" -ne 0 ]; then
@@ -229,10 +265,12 @@ get_certificate() {
 
 # 下载 docxy
 download_docxy() {
+  local TARGET_DIR=${1:-/usr/local/bin}
+  
   echo -e "${YELLOW}正在下载 docxy...${NC}"
   
   # 创建目录
-  mkdir -p /usr/local/bin
+  mkdir -p "$TARGET_DIR"
   
   # 检测系统架构
   ARCH=$(uname -m)
@@ -255,37 +293,109 @@ download_docxy() {
     echo -e "${GREEN}找到最新版本: $LATEST_VERSION${NC}"
   fi
   
+  # 如果是更新，检查当前版本
+  if [ "$IS_UPDATE" = true ] && [ -f "$TARGET_DIR/docxy" ]; then
+    # 尝试获取当前版本
+    CURRENT_VERSION=$("$TARGET_DIR/docxy" --version 2>/dev/null || echo "Unknown")
+    
+    # 如果是使用 --version 标志不能获取版本，尝试其他方法（比如通过文件修改时间）
+    if [ "$CURRENT_VERSION" = "Unknown" ]; then
+      echo -e "${YELLOW}无法获取当前版本信息，将继续更新...${NC}"
+    else
+      echo -e "${YELLOW}当前版本: $CURRENT_VERSION${NC}"
+      echo -e "${YELLOW}最新版本: $LATEST_VERSION${NC}"
+      
+      # 如果已经是最新版本，询问是否仍要更新
+      if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ]; then
+        echo -e "${YELLOW}当前已是最新版本，是否仍要重新下载? (y/n):${NC}"
+        read -r FORCE_UPDATE
+        if [[ ! "$FORCE_UPDATE" =~ ^[Yy]$ ]]; then
+          echo -e "${GREEN}保持当前版本，退出更新${NC}"
+          return 0
+        fi
+      fi
+    fi
+    
+    # 备份当前二进制
+    echo -e "${YELLOW}备份当前二进制文件...${NC}"
+    mv "$TARGET_DIR/docxy" "$TARGET_DIR/docxy.bak"
+  fi
+  
   # 下载二进制文件
-  curl -L "https://github.com/harrisonwang/docxy/releases/download/$LATEST_VERSION/$BINARY" -o /usr/local/bin/docxy || {
+  echo -e "${YELLOW}正在下载 ${LATEST_VERSION} 版本...${NC}"
+  curl -L "https://github.com/harrisonwang/docxy/releases/download/$LATEST_VERSION/$BINARY" -o "$TARGET_DIR/docxy" || {
     echo -e "${RED}下载 docxy 失败${NC}"
+    
+    # 如果是更新并且有备份，恢复备份
+    if [ "$IS_UPDATE" = true ] && [ -f "$TARGET_DIR/docxy.bak" ]; then
+      echo -e "${YELLOW}恢复备份...${NC}"
+      mv "$TARGET_DIR/docxy.bak" "$TARGET_DIR/docxy"
+    fi
+    
     exit 1
   }
   
   # 设置执行权限
-  chmod +x /usr/local/bin/docxy
+  chmod +x "$TARGET_DIR/docxy"
   
-  echo -e "${GREEN}docxy 下载成功到 /usr/local/bin/docxy${NC}"
+  # 如果是更新且成功，删除备份
+  if [ "$IS_UPDATE" = true ] && [ -f "$TARGET_DIR/docxy.bak" ]; then
+    rm "$TARGET_DIR/docxy.bak"
+  fi
+  
+  echo -e "${GREEN}docxy 下载成功到 $TARGET_DIR/docxy${NC}"
 }
 
-# 复制默认配置文件
-copy_default_config() {
-  echo -e "${YELLOW}正在复制和配置默认配置文件...${NC}"
-  mkdir -p /etc/docxy/config/
-  curl -Ls https://raw.githubusercontent.com/harrisonwang/docxy/main/config/default.toml -o /etc/docxy/config/default.toml || {
-    echo -e "${RED}下载默认配置文件失败${NC}"
+# 更新 docxy 二进制
+update_docxy() {
+  echo -e "${GREEN}=== 开始更新 Docxy 二进制文件 ===${NC}\n"
+  
+  # 检查 docxy 是否已安装
+  if [ ! -f "/usr/local/bin/docxy" ]; then
+    echo -e "${RED}Docxy 未安装，无法更新。请运行完整安装。${NC}"
     exit 1
-  }
+  fi
+  
+  # 停止 docxy 服务
+  echo -e "${YELLOW}停止 docxy 服务...${NC}"
+  if systemctl is-active --quiet docxy; then
+    systemctl stop docxy
+    echo -e "${GREEN}docxy 服务已停止${NC}"
+  else
+    echo -e "${YELLOW}docxy 服务未运行${NC}"
+  fi
+  
+  # 下载最新版本
+  download_docxy "/usr/local/bin"
+  
+  # 重新启动服务
+  echo -e "${YELLOW}重新启动 docxy 服务...${NC}"
+  systemctl start docxy
+  
+  # 检查服务状态
+  if systemctl is-active --quiet docxy; then
+    echo -e "${GREEN}docxy 服务已成功重启${NC}"
+  else
+    echo -e "${RED}docxy 服务启动失败，请检查日志: journalctl -u docxy${NC}"
+    exit 1
+  fi
+  
+  echo -e "\n${GREEN}=== Docxy 更新完成 ===${NC}"
+}
 
-  # 修改 default.toml 中的配置
-  sed -i "s/^http_port = .*/http_port = ${HTTP_PORT}/" /etc/docxy/config/default.toml
-  sed -i "s/^https_port = .*/https_port = ${HTTPS_PORT}/" /etc/docxy/config/default.toml
-  sed -i "s/^http_enabled = .*/http_enabled = ${HTTP_ENABLED}/" /etc/docxy/config/default.toml
-  sed -i "s/^https_enabled = .*/https_enabled = ${HTTPS_ENABLED}/" /etc/docxy/config/default.toml
-  sed -i "s/^behind_proxy = .*/behind_proxy = ${BEHIND_PROXY}/" /etc/docxy/config/default.toml
-  sed -i "s#^cert_path = .*#cert_path = \"${DOCXY_CERT_PATH}\"#" /etc/docxy/config/default.toml
-  sed -i "s#^key_path = .*#key_path = \"${DOCXY_KEY_PATH}\"#" /etc/docxy/config/default.toml
+# 下载、配置和启动服务
+install_docxy() {
+  # 下载 docxy
+  download_docxy
 
-  echo -e "${GREEN}默认配置文件已复制并配置到 /etc/docxy/config/default.toml${NC}"
+  # 修改systemd服务创建函数
+  create_service
+
+  # 复制默认配置文件
+  copy_default_config
+
+  # 启动服务
+  start_service
 }
 
 # 修改systemd服务创建函数
@@ -464,6 +574,16 @@ EOF
 main() {
   echo -e "${GREEN}=== Docker Registry 代理安装脚本 ===${NC}\n"
   
+  parse_args "$@"
+  
+  # 如果是更新模式，执行更新操作
+  if [ "$IS_UPDATE" = true ]; then
+    echo -e "${YELLOW}正在更新 Docxy...${NC}"
+    update_docxy
+    echo -e "${GREEN}Docxy 更新完成${NC}"
+    exit 0
+  fi
+
   get_domain
   ask_deployment_mode
   set_mode_parameters
@@ -487,10 +607,7 @@ main() {
   check_ports
 
   # 下载、配置和启动服务
-  download_docxy
-  create_service
-  copy_default_config
-  start_service
+  install_docxy
 
   # 如果是Nginx模式，创建配置文件
   if [ "$DEPLOYMENT_MODE" = "nginx" ]; then
@@ -501,4 +618,4 @@ main() {
 }
 
 # 执行主函数
-main
+main "$@"
