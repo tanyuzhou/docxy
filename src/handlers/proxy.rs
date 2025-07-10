@@ -1,23 +1,36 @@
 use actix_web::{web, HttpRequest, HttpResponse, Result};
 use futures::stream::StreamExt;
-use log::{info, error};
+use log::{info, error, debug};
+use std::collections::HashMap;
 
 use crate::error::AppError;
 use crate::HTTP_CLIENT;
+use crate::config::RegistrySettings;
 
 pub async fn handle_request(
     req: HttpRequest,
     path: web::Path<(String, String, String)>,
 ) -> Result<HttpResponse, AppError> {
-    let upstream_registry = req.app_data::<web::Data<String>>().unwrap().as_str();
+    let registry_settings = req.app_data::<web::Data<RegistrySettings>>().unwrap();
     // 获取路径参数
-    let (image_name, path_type, reference) = path.into_inner();
+    let (mut image_name, path_type, reference) = path.into_inner();
+
+    debug!("原始镜像路径: {}", image_name);
+    
+    // 检查是否需要重新映射注册表
+    let (target_registry, remapped_image_name) = get_target_registry(&registry_settings, &image_name);
+    if remapped_image_name != image_name {
+        debug!("重映射路径: {} -> {}", image_name, remapped_image_name);
+        image_name = remapped_image_name;
+    }
 
     // 使用常量构建目标URL
     let path = format!("/v2/{image_name}/{path_type}/{reference}");
     
     // 构建请求，根据原始请求的方法选择 HEAD 或 GET
-    let target_url = format!("{upstream_registry}{path}");
+    let target_url = format!("{target_registry}{path}");
+    debug!("目标URL: {}", target_url);
+    
     let mut request_builder = if req.method() == actix_web::http::Method::HEAD {
         HTTP_CLIENT.head(&target_url)
     } else {
@@ -93,4 +106,29 @@ pub async fn handle_request(
             
         Ok(builder.streaming(stream))
     }
+}
+
+// 根据映射配置获取目标注册表和修改后的镜像名称
+fn get_target_registry(registry_settings: &RegistrySettings, image_name: &str) -> (String, String) {
+    // 默认使用上游注册表
+    let default_registry = registry_settings.upstream_registry.clone();
+    
+    // 如果没有映射配置，直接返回原始信息
+    if registry_settings.registry_mapping.is_none() {
+        return (default_registry, image_name.to_string());
+    }
+    
+    let registry_mapping = registry_settings.registry_mapping.as_ref().unwrap();
+    
+    // 检查镜像名称是否包含需要重映射的注册表部分
+    for (source_registry, target_registry) in registry_mapping {
+        if image_name.starts_with(&format!("{}/", source_registry)) {
+            // 找到映射，提取实际镜像路径
+            let actual_image_path = image_name[source_registry.len() + 1..].to_string();
+            return (target_registry.clone(), actual_image_path);
+        }
+    }
+    
+    // 没有找到匹配的映射，返回原始信息
+    (default_registry, image_name.to_string())
 }

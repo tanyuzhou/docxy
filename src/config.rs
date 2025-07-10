@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::collections::HashMap;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ServerSettings {
@@ -12,6 +13,7 @@ pub struct ServerSettings {
 #[derive(Debug, Deserialize, Clone)]
 pub struct RegistrySettings {
     pub upstream_registry: String,
+    pub registry_mapping: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

@@ -7,6 +7,13 @@ behind_proxy = false
 
 [registry]
 upstream_registry = "https://registry-1.docker.io"
+# Registry mapping configuration allows for redirecting requests to different registries
+# Format: source_registry = "target_registry"
+# Example: when you run `docker pull docxy.example.com/ghcr.io/binarization/something:latest`
+# it will pull from `ghcr.io/binarization/something:latest`
+[registry.registry_mapping]
+"ghcr.io" = "https://ghcr.io"
+"docker.io" = "https://registry-1.docker.io"
 
 [tls]
 cert_path = "/root/.acme.sh/example.com_ecc/fullchain.cer"

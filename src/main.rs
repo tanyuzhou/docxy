@@ -74,10 +74,21 @@ async fn main() -> Result<(), AppError> {
         info!("代理模式: 已启用");
     }
     
+    info!("上游注册表: {}", settings.registry.upstream_registry);
+    
+    // 输出注册表映射配置
+    if let Some(mapping) = &settings.registry.registry_mapping {
+        info!("注册表映射配置:");
+        for (source, target) in mapping {
+            info!("  {} -> {}", source, target);
+        }
+    } else {
+        info!("注册表映射: 未配置");
+    }
     
 
     // 创建应用配置
-    let http_app_data = web::Data::new(settings.registry.upstream_registry.clone());
+    let http_app_data = web::Data::new(settings.registry.clone());
     
 
     let http_app = move || {
@@ -133,7 +144,7 @@ async fn main() -> Result<(), AppError> {
             Ok(rustls_config) => {
                 let https_server = HttpServer::new(move || {
                     App::new()
-                        .app_data(web::Data::new(settings.registry.upstream_registry.clone()))
+                        .app_data(web::Data::new(settings.registry.clone()))
                         .route("/v2/", web::get().to(handlers::proxy_challenge))
                         .route("/auth/token", web::get().to(handlers::get_token))
                         .route("/health", web::get().to(handlers::health_check))
